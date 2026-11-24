@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import sqlite3
+import subprocess
 import sys
 import time
 import urllib.error
@@ -405,7 +406,7 @@ def main():
         build()
     elif a.cmd == "open":
         build()
-        os.system(f"xdg-open {OUT}")
+        subprocess.run(["xdg-open", str(OUT)], check=False)
     else:
         selfcheck()
 
