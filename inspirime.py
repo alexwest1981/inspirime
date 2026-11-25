@@ -56,6 +56,9 @@ SCHEMA = """create table if not exists shots(
   type text, style text, mood text, desc text, added text,
   layout text, sections text, typography text, density text, radius text,
   imagery text, notes text)"""
+HANDOFFS = """create table if not exists handoffs(
+  id integer primary key, key text not null, target text, prompt text not null,
+  created text, acked text)"""
 
 
 def env_key(*names, default=""):
@@ -75,6 +78,7 @@ def env_key(*names, default=""):
 def db():
     con = sqlite3.connect(DB)
     con.execute(SCHEMA)
+    con.execute(HANDOFFS)
     # older indexes predate the structured fields: add what is missing instead of rebuilding
     for col in META_FIELDS[4:] + ("w", "h", "colors", "hue", "huefam", "source"):
         try:
@@ -345,7 +349,9 @@ dialog{background:var(--card);color:var(--fg);border:1px solid var(--line);borde
 dialog::backdrop{background:rgba(5,6,8,.72)}
 dialog h2{margin:0 0 12px;font-size:13px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
 #ptext{width:100%;background:#0f1114;border:1px solid var(--line);border-radius:9px;color:var(--fg);font:12.5px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;padding:12px;resize:vertical}
-.dlgbar{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}
+.dlgbar{display:flex;gap:8px;justify-content:flex-end;align-items:center;margin-top:12px}
+#pmsg{font-size:12px;color:var(--dim);margin-right:auto;align-self:center}
+.chip.primary{background:var(--acc);border-color:var(--acc);color:#101204}
 </style></head><body>
 <header>
 <h1>Inspirime<em id=count></em></h1>
@@ -369,8 +375,17 @@ dialog h2{margin:0 0 12px;font-size:13px;font-weight:600;letter-spacing:.1em;tex
   <h2 id=pdlgtitle>Promp</h2>
   <textarea id=ptext rows=24 spellcheck=false></textarea>
   <div class=dlgbar>
+    <span id=pmsg></span>
+    <select id=ptarget title="Vilken agentverktygsharness du skickar till">
+      <option>Hermes</option>
+      <option>Claude Code</option>
+      <option>Codex</option>
+      <option>Cursor / VS Code</option>
+      <option>Annan MCP-klient</option>
+    </select>
     <button id=pclose class=chip>Stäng</button>
     <button id=pcopy class=chip>Kopiera</button>
+    <button id=psend class="chip primary">Skicka</button>
   </div>
 </dialog>
 <script>
@@ -426,10 +441,13 @@ function render() {
 }
 
 const dlg = document.getElementById("promptdlg");
+let openKey = null;
 document.getElementById("grid").onclick = e => {
   const fig = e.target.closest("figure");
   const d = fig && DATA.find(x => x.key === fig.dataset.key);
   if (!d) return;
+  openKey = d.key;
+  document.getElementById("pmsg").textContent = "";
   document.getElementById("pdlgtitle").textContent =
     "prompt · " + (d.type || "inspiration") + ((d.style || []).length ? " · " + d.style.join(", ") : "");
   document.getElementById("ptext").value = d.prompt;
@@ -442,12 +460,48 @@ document.getElementById("grid").onclick = e => {
   });
 };
 document.getElementById("pclose").onclick = () => dlg.close();
+async function toClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (e) {
+    try {
+      const t = document.getElementById("ptext");
+      t.select();
+      return document.execCommand("copy");
+    } catch (e2) {
+      return false;
+    }
+  }
+}
 document.getElementById("pcopy").onclick = async () => {
-  const t = document.getElementById("ptext"), b = document.getElementById("pcopy");
-  try { await navigator.clipboard.writeText(t.value); }
-  catch { t.select(); document.execCommand("copy"); }
-  b.textContent = "Kopierat";
+  const b = document.getElementById("pcopy");
+  const ok = await toClipboard(document.getElementById("ptext").value);
+  b.textContent = ok ? "Kopierat" : "Kunde inte";
   setTimeout(() => { b.textContent = "Kopiera"; }, 1500);
+};
+document.getElementById("psend").onclick = async () => {
+  const msg = document.getElementById("pmsg"), target = document.getElementById("ptarget").value;
+  const brief = document.getElementById("ptext").value;
+  msg.textContent = "skickar …";
+  const copied = await toClipboard(brief);
+  const clip = copied ? "kopierat" : "kunde inte kopiera";
+  if (location.protocol === "file:") {
+    msg.textContent = clip + " - kön kräver: inspirime open";
+    return;
+  }
+  try {
+    const r = await fetch("/handoff", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: openKey, target })
+    });
+    const out = await r.json();
+    msg.textContent = out.ok
+      ? "köad till " + out.target + " · " + clip + " · agenten hämtar brief + bild via MCP"
+      : clip + " · kön tog inte emot (okänd bild)";
+  } catch (e) {
+    msg.textContent = clip + " · ingen server";
+  }
 };
 
 const scanbtn = document.getElementById("scanbtn"), scanmsg = document.getElementById("scanmsg");
@@ -658,17 +712,202 @@ def selfcheck():
     try:
         con = db()
         con.execute("insert or replace into shots(key,file,w,h,colors,hue,huefam,source,type,style,mood,desc,added)"
-                    " values('a-400x300','library/a.png',400,300,'[]',0,'warm','pinterest','landing','[]','','x','t')")
+                    " values('a-400x300',?,400,300,'[]',0,'warm','pinterest','landing','[]','','x','t')", (str(tmp),))
         con.execute("insert or replace into shots(key,file,w,h,colors,hue,huefam,source,type,style,mood,desc,added)"
-                    " values('a-400x300','library/a.webp',400,300,'[]',0,'warm','pinterest','landing','[]','','y','t')")
+                    " values('a-400x300',?,400,300,'[]',0,'warm','pinterest','landing','[]','','y','t')", (str(tmp),))
         con.commit()
         assert con.execute("select count(*) from shots").fetchone()[0] == 1
+        assert handoff("a-400x300", "Hermes")["prompt"], "handoff must freeze a brief"
+        assert "a-400x300" in mcp_tool("handoffs", {})[0]["text"]
+        got = mcp_tool("get", {"key": "a-400x300"})
+        assert [c["type"] for c in got] == ["text", "image"], [c["type"] for c in got]
+        assert mcp_tool("ack", {"key": "a-400x300"})[0]["text"].startswith("1")
+        assert "Inga väntande" in mcp_tool("handoffs", {})[0]["text"]
         con.close()
     finally:
         DB = real
         (ROOT / "selfcheck.db").unlink(missing_ok=True)
     tmp.unlink(missing_ok=True)
     print("selfcheck ok")
+
+
+def record(con, key):
+    """One shot as the dict prompt_for expects."""
+    cur = con.execute("select * from shots where key=?", (key,))
+    row = cur.fetchone()
+    if not row:
+        return None
+    r = dict(zip([d[0] for d in cur.description], row))
+    r["colors"] = json.loads(r["colors"] or "[]")
+    r["style"] = json.loads(r["style"] or "[]")
+    r["sections"] = json.loads(r["sections"] or "[]")
+    r["prompt"] = prompt_for(r)
+    return r
+
+
+def handoff(key, target="Hermes"):
+    """Freeze the brief as it is now, so a later change to prompt_for cannot alter what was sent."""
+    con = db()
+    r = record(con, key)
+    if not r:
+        con.close()
+        return None
+    con.execute("insert into handoffs(key,target,prompt,created) values(?,?,?,?)",
+                (key, target, r["prompt"], datetime.now(timezone.utc).isoformat(timespec="seconds")))
+    con.commit()
+    con.close()
+    return r
+
+
+def one_line(r):
+    return (f"{r['key']} · {r.get('type') or '?'} · {', '.join(r.get('style') or []) or '-'} · "
+            f"{r.get('w')}×{r.get('h')} · {r.get('source') or '?'} · "
+            f"{', '.join(c['hex'] for c in (r.get('colors') or [])[:4])}\n"
+            f"    {r.get('desc') or '(no description yet)'}")
+
+
+MCP_TOOLS = [
+    {"name": "handoffs",
+     "description": "Inspiration references the user pressed 'Skicka' on in the Inspirime gallery, "
+                    "newest first. Call this first. Each entry has a key: call get(key) for the full "
+                    "brief plus the reference image, then ack(key) when you have taken it.",
+     "inputSchema": {"type": "object", "properties": {"limit": {"type": "integer"}}}},
+    {"name": "search",
+     "description": "Search the inspiration library by free text and filters (type, style tag, hue "
+                    "family, source). Returns one line per match with its key.",
+     "inputSchema": {"type": "object", "properties": {
+         "query": {"type": "string", "description": "free text over description, layout and style"},
+         "type": {"type": "string"}, "style": {"type": "string"},
+         "hue": {"type": "string", "enum": ["warm", "cool", "green", "neutral"]},
+         "source": {"type": "string"}, "limit": {"type": "integer"}}}},
+    {"name": "get",
+     "description": "Full record for one inspiration: measured palette, model-read layout/typography, "
+                    "the ready-to-use design brief, and the image itself as an attachment.",
+     "inputSchema": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]}},
+    {"name": "ack",
+     "description": "Mark a handoff as taken so it stops showing up in handoffs().",
+     "inputSchema": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]}},
+]
+
+
+def mcp_tool(name, args):
+    """One MCP tools/call. Returns the content list."""
+    con = db()
+    try:
+        if name == "handoffs":
+            rows = con.execute("select id,key,target,created from handoffs where acked is null"
+                               " order by created desc limit ?", (int(args.get("limit") or 5),)).fetchall()
+            if not rows:
+                return [{"type": "text", "text": "Inga väntande handoffs. Använd search för att leta i biblioteket."}]
+            text = [f"{len(rows)} väntande handoff(s), nyast först:"]
+            for i, (_, key, target, created) in enumerate(rows, 1):
+                r = record(con, key)
+                text.append(f"{i}) [{target or 'okänd'} · {created}]\n    " + (one_line(r) if r else key))
+            text.append("\nTa en med get(key) — då följer referensbilden med — och kvittera sedan med ack(key).")
+            return [{"type": "text", "text": "\n".join(text)}]
+
+        if name == "search":
+            where, params = [], []
+            for field in ("type", "huefam", "source"):
+                val = args.get(field if field != "huefam" else "hue")
+                if val:
+                    where.append(f"{field}=?")
+                    params.append(str(val).lower())
+            if args.get("style"):
+                where.append("style like ?")
+                params.append(f'%"{str(args["style"]).lower()}"%')
+            if (args.get("query") or "").strip():
+                where.append("lower(coalesce(desc,'')||' '||coalesce(layout,'')||' '||coalesce(style,'')"
+                             "||' '||coalesce(type,'')||' '||coalesce(notes,'')) like ?")
+                params.append(f"%{args['query'].strip().lower()}%")
+            sql = "select * from shots" + (" where " + " and ".join(where) if where else "")
+            sql += " order by added desc limit ?"
+            params.append(int(args.get("limit") or 5))
+            cur = con.execute(sql, params)
+            cols = [d[0] for d in cur.description]
+            rows = []
+            for raw in cur:
+                r = dict(zip(cols, raw))
+                r["colors"] = json.loads(r["colors"] or "[]")
+                r["style"] = json.loads(r["style"] or "[]")
+                rows.append(r)
+            if not rows:
+                return [{"type": "text", "text": "Inga träffar."}]
+            return [{"type": "text", "text": "\n".join(one_line(r) for r in rows)}]
+
+        if name == "get":
+            r = record(con, args.get("key", ""))
+            if not r:
+                return [{"type": "text", "text": f"Hittar ingen bild med nyckeln {args.get('key')!r}."}]
+            palette_line = ", ".join(f"{c['hex']} {c['pct']}%" for c in r["colors"])[:400]
+            head = (f"{r['key']}\n{r.get('desc') or ''}\n"
+                    f"typ: {r.get('type')} · stil: {', '.join(r.get('style') or [])} · känsla: {r.get('mood') or '-'}\n"
+                    f"referensbild: {ROOT / r['file']}\n"
+                    f"färger: {palette_line}\n"
+                    f"kulör: {r.get('huefam')} · täthet: {r.get('density') or '-'} · radie: {r.get('radius') or '-'}\n"
+                    "--- färdig brief ---\n")
+            content = [{"type": "text", "text": head + r["prompt"]}]
+            try:
+                data = base64.b64encode((ROOT / r["file"]).read_bytes()).decode()
+                mime = mimetypes.guess_type(r["file"])[0] or "image/jpeg"
+                content.append({"type": "image", "data": data, "mimeType": mime})
+            except Exception as e:
+                content.append({"type": "text", "text": f"(kunde inte bifoga bilden: {e})"})
+            return content
+
+        if name == "ack":
+            cur = con.execute("update handoffs set acked=? where key=? and acked is null",
+                              (datetime.now(timezone.utc).isoformat(timespec="seconds"), args.get("key", "")))
+            con.commit()
+            return [{"type": "text", "text": f"{cur.rowcount} handoff(s) kvitterade."}]
+
+        return [{"type": "text", "text": f"Okänt verktyg: {name}"}]
+    finally:
+        con.close()
+
+
+def mcp():
+    """Minimal stdio MCP server (newline-delimited JSON-RPC) - no dependencies, no port."""
+    def emit(obj):
+        sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
+        sys.stdout.flush()
+
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            emit({"jsonrpc": "2.0", "id": None,
+                  "error": {"code": -32700, "message": "parse error"}})
+            continue
+        if "id" not in msg:
+            continue  # notification: answering it breaks some clients
+        method, rid = msg.get("method"), msg["id"]
+        try:
+            if method == "initialize":
+                res = {"protocolVersion": msg.get("params", {}).get("protocolVersion", "2024-11-05"),
+                       "capabilities": {"tools": {}},
+                       "serverInfo": {"name": "inspirime", "version": "1.0"},
+                       "instructions": "Inspiration library for design work. Call handoffs first: those are "
+                                       "references the user just sent you. get(key) returns the brief and "
+                                       "attaches the image; ack(key) clears it."}
+            elif method == "tools/list":
+                res = {"tools": MCP_TOOLS}
+            elif method == "tools/call":
+                p = msg.get("params", {})
+                res = {"content": mcp_tool(p.get("name"), p.get("arguments") or {})}
+            elif method == "ping":
+                res = {}
+            else:
+                emit({"jsonrpc": "2.0", "id": rid,
+                      "error": {"code": -32601, "message": f"unknown method {method}"}})
+                continue
+            emit({"jsonrpc": "2.0", "id": rid, "result": res})
+        except Exception as e:  # a bad call must not kill the session
+            emit({"jsonrpc": "2.0", "id": rid,
+                  "error": {"code": -32603, "message": f"{type(e).__name__}: {e}"}})
 
 
 SCAN = {"running": False, "log": ""}
@@ -710,8 +949,18 @@ def serve(port=8789, open_browser=True):
             super().do_GET()
 
         def do_POST(self):
-            if self.path.split("?")[0] == "/scan":
+            path = self.path.split("?")[0]
+            if path == "/scan":
                 return self._json({"started": run_scan(), **SCAN})
+            if path == "/handoff":
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                try:
+                    req = json.loads(body or b"{}")
+                except json.JSONDecodeError:
+                    return self._json({"ok": False, "error": "bad json"})
+                r = handoff(req.get("key", ""), req.get("target") or "Hermes")
+                return self._json({"ok": bool(r), "target": req.get("target") or "Hermes",
+                                   "prompt": (r or {}).get("prompt", "")})
             self.send_error(404)
 
         def _json(self, obj):
@@ -751,6 +1000,7 @@ def main():
     o.add_argument("--port", type=int, default=8789)
     o.add_argument("--no-browser", action="store_true")
     sub.add_parser("selfcheck", help="run the assert-based check")
+    sub.add_parser("mcp", help="stdio MCP server for agent harnesses (handoffs/search/get/ack)")
     a = ap.parse_args()
 
     if a.cmd == "scan":
@@ -769,6 +1019,8 @@ def main():
         build()
     elif a.cmd == "open":
         serve(a.port, not a.no_browser)
+    elif a.cmd == "mcp":
+        mcp()
     else:
         selfcheck()
 

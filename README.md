@@ -65,6 +65,37 @@ INSPIRIME_VISION_URL=http://127.0.0.1:11434/v1 \
 INSPIRIME_VISION_MODEL=qwen3-vl inspirime scan              # egen router
 ```
 
+## Skicka till en agent (MCP)
+
+Klicka på en bild → **Skicka** → välj mottagare. Två saker händer:
+
+1. briefen hamnar i urklipp (fungerar med vilken app som helst, även de utan MCP),
+2. en *handoff* köas i databasen med briefen fryst som den såg ut just då.
+
+Agenten hämtar den via MCP-servern `inspirime` (stdio, inga beroenden, ingen port):
+
+```bash
+python3 ~/Projects/inspirime/inspirime.py mcp
+```
+
+| Verktyg | Gör |
+|---|---|
+| `handoffs` | listar det du tryckt Skicka på, nyast först — agenten börjar här |
+| `search` | fritext + typ/stil/kulör/källa över hela biblioteket |
+| `get` | hela posten + färdig brief **och referensbilden som bilaga** (agenten ser den) |
+| `ack` | kvitterar så handoffen försvinner ur kön |
+
+Redan inkopplad i Hermes (verktygen heter `mcp__inspirime__*` och dyker upp i **nya** sessioner)
+och i Claude Code. Andra klienter:
+
+```bash
+codex mcp add inspirime -- /usr/bin/python3 /home/alex/Projects/inspirime/inspirime.py mcp
+opencode mcp add inspirime --command "/usr/bin/python3 /home/alex/Projects/inspirime/inspirime.py mcp"
+```
+
+Inget går förlorat om agenten inte är igång: kön ligger kvar, och `get` fungerar i efterhand på
+vilken nyckel som helst ur biblioteket.
+
 ## Autopilot
 
 ```bash
