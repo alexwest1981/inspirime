@@ -1,5 +1,9 @@
 # Inspirime
 
+[![PyPI](https://img.shields.io/pypi/v/inspirime)](https://pypi.org/project/inspirime/)
+[![CI](https://github.com/alexwest1981/inspirime/actions/workflows/ci.yml/badge.svg)](https://github.com/alexwest1981/inspirime/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 **Your saved design screenshots, turned into a library a design agent can actually read.**
 
 Drop in a folder of Pinterest/Dribbble saves. Inspirime measures the colours from the pixels,
@@ -33,12 +37,13 @@ Inspirime does two things about that:
 ## Install
 
 ```bash
-pipx install git+https://github.com/alexwest1981/inspirime      # or: pip install --user .
+pipx install inspirime                                   # from PyPI
 inspirime demo                                          # sample library, no key needed
 inspirime open                                          # gallery at http://127.0.0.1:8789
 ```
 
 Python 3.9+, one dependency (Pillow), no server to deploy, no database to install — SQLite, one file.
+From a checkout instead: `pip install .`
 
 ## Use
 
