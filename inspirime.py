@@ -433,8 +433,13 @@ document.getElementById("grid").onclick = e => {
   document.getElementById("pdlgtitle").textContent =
     "prompt · " + (d.type || "inspiration") + ((d.style || []).length ? " · " + d.style.join(", ") : "");
   document.getElementById("ptext").value = d.prompt;
-  document.getElementById("ptext").scrollTop = 0;
   dlg.showModal();
+  // showModal focuses the textarea and scrolls it to the end; put the reader back at the top
+  requestAnimationFrame(() => {
+    const t = document.getElementById("ptext");
+    t.setSelectionRange(0, 0);
+    t.scrollTop = 0;
+  });
 };
 document.getElementById("pclose").onclick = () => dlg.close();
 document.getElementById("pcopy").onclick = async () => {
