@@ -7,18 +7,29 @@ galleri med filter.
 ## Snabbstart
 
 ```bash
-mkdir -p ~/Projects/inspirime/inbox/dribbble     # eller pinterest
-cp ~/Hämtningar/*.jpg ~/Projects/inspirime/inbox/dribbble/
-
-inspirime scan        # indexerar nya bilder (kör om den igen om några blev kvar)
-inspirime open        # bygger gallery.html och öppnar den
+inspirime open        # startar galleriet på http://127.0.0.1:8789 och öppnar webbläsaren
 ```
 
-Bilder som redan finns någon annanstans indexeras på plats utan att flyttas:
+Lägg nya dumpar i `inbox/pinterest/` eller `inbox/dribbble/` och tryck **Scanna nya**
+i sidan — den indexerar, beskriver och laddar om galleriet själv. Mappnamnet blir
+källan i filtret.
+
+Vill du indexera bilder som redan ligger någon annanstans (de kopieras, originalen
+rörs inte):
 
 ```bash
 inspirime scan ~/Pictures/Inspo --source inspo
+inspirime build
 ```
+
+## Knappar i galleriet
+
+| Gör | Hur |
+|---|---|
+| indexera nya bilder | **Scanna nya** (kräver att sidan körs via `inspirime open`, inte `file://`) |
+| filtrera | klicka på stil/typ/färg/källa, eller sök i fritextfältet |
+| sortera | välj Nyast / färg / typ |
+| få en promp till en designagent | klicka på en bild → panel med färdig brief → **Kopiera** |
 
 ## Vad som händer med en bild
 
@@ -59,11 +70,11 @@ INSPIRIME_VISION_MODEL=qwen3-vl inspirime scan              # egen router
 ## Filer
 
 ```
-inspirime.py     hela verktyget (scan / build / open / selfcheck)
+inspirime.py     hela verktyget (open / scan / build / selfcheck)
 inbox/<källa>/   hit sparar du dumparna; mappnamnet blir källan
 library/         kopior av indexerade bilder
 inspirime.db     index
-gallery.html     galleriet (genereras, öppnas med webbläsaren)
+gallery.html     galleriet (genereras; öppnas via http://127.0.0.1:8789/gallery.html)
 ```
 
 `./inspirime.py selfcheck` kör kontrollen av palett, JSON-tolkning och

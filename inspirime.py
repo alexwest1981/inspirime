@@ -20,6 +20,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -178,18 +179,19 @@ def source_of(p, explicit):
 
 
 def scan(paths, source=None):
+    """Index the given image files. Returns the log lines so a caller can show them."""
     con = db()
     files = [p for p in paths if p.suffix.lower() in EXT]
     # largest file first: an image saved as both .jpg and .webp indexes once, as the better copy
     files.sort(key=lambda p: p.stat().st_size, reverse=True)
-    new = 0
+    out, new = [], 0
     for p in files:
         try:
             im = Image.open(p)
             w, h = im.size
             colors = palette(im)
         except Exception as e:
-            print(f"skip {p.name}: {e}")
+            out.append(f"skip {p.name}: {e}")
             continue
         key = f"{p.stem}-{w}x{h}"
         if con.execute("select 1 from shots where key=?", (key,)).fetchone():
@@ -210,17 +212,19 @@ def scan(paths, source=None):
                      datetime.now(timezone.utc).isoformat(timespec="seconds")))
         con.commit()
         new += 1
-        print(f"+ {dest.name}  [{meta.get('type', 'pending')}] {meta.get('desc', '')}")
+        out.append(f"+ {dest.name}  [{meta.get('type', 'pending')}] {meta.get('desc', '')}")
     for key, file in con.execute("select key,file from shots where desc is null or desc=''").fetchall():
         meta = describe(ROOT / file)
         if meta:
             con.execute("update shots set type=?,style=?,mood=?,desc=? where key=?",
                         (meta["type"], json.dumps(meta["style"]), meta["mood"], meta["desc"], key))
             con.commit()
-            print(f"~ described {file}")
+            out.append(f"~ described {file}")
     total = con.execute("select count(*) from shots").fetchone()[0]
     pending = con.execute("select count(*) from shots where desc is null or desc=''").fetchone()[0]
-    print(f"{new} new, {total} total, {pending} pending (run scan again later)")
+    out.append(f"{new} new, {total} total, {pending} pending (run scan again later)")
+    con.close()
+    return out
 
 
 TEMPLATE = r"""<!doctype html>
@@ -247,7 +251,8 @@ main{padding:22px 26px 90px;column-count:4;column-gap:15px}
 @media(max-width:1500px){main{column-count:3}}
 @media(max-width:1000px){main{column-count:2}}
 @media(max-width:640px){main{column-count:1}}
-figure{margin:0 0 15px;break-inside:avoid;background:var(--card);border:1px solid var(--line);border-radius:11px;overflow:hidden}
+figure{margin:0 0 15px;break-inside:avoid;background:var(--card);border:1px solid var(--line);border-radius:11px;overflow:hidden;cursor:pointer}
+figure:hover{border-color:#3d434c}
 figure img{display:block;width:100%;height:auto;background:#0b0c0e}
 figcaption{padding:10px 12px 12px;font-size:12px;color:var(--dim)}
 figcaption b{display:block;color:var(--fg);font-weight:500;font-size:12.5px;line-height:1.4;margin-bottom:5px}
@@ -256,6 +261,14 @@ figcaption b{display:block;color:var(--fg);font-weight:500;font-size:12.5px;line
 .dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:3px;vertical-align:-1px}
 .empty{padding:70px 26px;color:var(--dim);font-size:15px;line-height:1.7}
 code{background:var(--card);border:1px solid var(--line);padding:2px 6px;border-radius:5px;font-size:13px}
+#scanbtn{border-color:#3d434c;color:var(--fg);white-space:nowrap}
+#scanbtn:disabled{opacity:.55;cursor:progress}
+#scanmsg{font-size:12px;color:var(--dim)}
+dialog{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:14px;padding:20px 22px;width:min(760px,92vw)}
+dialog::backdrop{background:rgba(5,6,8,.72)}
+dialog h2{margin:0 0 12px;font-size:13px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+#ptext{width:100%;background:#0f1114;border:1px solid var(--line);border-radius:9px;color:var(--fg);font:12.5px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;padding:12px;resize:vertical}
+.dlgbar{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}
 </style></head><body>
 <header>
 <h1>Inspirime<em id=count></em></h1>
@@ -266,6 +279,8 @@ code{background:var(--card);border:1px solid var(--line);padding:2px 6px;border-
     <option value=hue>Sortera på färg</option>
     <option value=type>Sortera på typ</option>
   </select>
+  <button id=scanbtn class=chip title="Leta nya bilder i inbox/">Scanna nya</button>
+  <span id=scanmsg></span>
 </div>
 <div class=row><span class=lbl>stil</span><span class=row id=fstyle></span></div>
 <div class=row><span class=lbl>typ</span><span class=row id=ftype></span></div>
@@ -273,6 +288,14 @@ code{background:var(--card);border:1px solid var(--line);padding:2px 6px;border-
 <div class=row><span class=lbl>källa</span><span class=row id=fsrc></span></div>
 </header>
 <main id=grid></main>
+<dialog id=promptdlg>
+  <h2 id=pdlgtitle>Promp</h2>
+  <textarea id=ptext rows=13 spellcheck=false></textarea>
+  <div class=dlgbar>
+    <button id=pclose class=chip>Stäng</button>
+    <button id=pcopy class=chip>Kopiera</button>
+  </div>
+</dialog>
 <script>
 const DATA = /*DATA*/[];
 const HUE = {warm:"varm", cool:"kall", green:"grön", neutral:"neutral"};
@@ -314,7 +337,7 @@ function render() {
     rows.length + " av " + DATA.length + " bilder";
 
   document.getElementById("grid").innerHTML = rows.length ? rows.map(d => `
-<figure>
+<figure data-key="${esc(d.key)}" title="Klicka för att skapa en prompt">
   <img loading=lazy src="${esc(d.file)}" alt="${esc(d.desc || d.key)}">
   <figcaption>
     <b>${esc(d.desc || "(väntar på beskrivning - kör scan igen)")}</b>
@@ -322,14 +345,72 @@ function render() {
     <div class=tags>${d.colors.map(c => `<span class=dot style="background:${esc(c)}" title="${esc(c)}"></span>`).join("")}
       ${(d.style || []).map(t => `<span class=tag>${esc(t)}</span>`).join("")}</div>
   </figcaption>
-</figure>`).join("") : `<div class=empty>Inga träffar.<br>Lägg skärmdumpar i <code>inbox/pinterest</code> eller <code>inbox/dribbble</code> och kör <code>inspirime scan</code>.</div>`;
+</figure>`).join("") : `<div class=empty>Inga träffar.<br>Lägg skärmdumpar i <code>inbox/pinterest</code> eller <code>inbox/dribbble</code> och tryck <b>Scanna nya</b>.</div>`;
 }
+
+const dlg = document.getElementById("promptdlg");
+document.getElementById("grid").onclick = e => {
+  const fig = e.target.closest("figure");
+  const d = fig && DATA.find(x => x.key === fig.dataset.key);
+  if (!d) return;
+  document.getElementById("pdlgtitle").textContent =
+    "prompt · " + (d.type || "inspiration") + ((d.style || []).length ? " · " + d.style.join(", ") : "");
+  document.getElementById("ptext").value = d.prompt;
+  dlg.showModal();
+};
+document.getElementById("pclose").onclick = () => dlg.close();
+document.getElementById("pcopy").onclick = async () => {
+  const t = document.getElementById("ptext"), b = document.getElementById("pcopy");
+  try { await navigator.clipboard.writeText(t.value); }
+  catch { t.select(); document.execCommand("copy"); }
+  b.textContent = "Kopierat";
+  setTimeout(() => { b.textContent = "Kopiera"; }, 1500);
+};
+
+const scanbtn = document.getElementById("scanbtn"), scanmsg = document.getElementById("scanmsg");
+const lastLine = s => (s || "").trim().split("\n").pop() || "";
+scanbtn.onclick = async () => {
+  if (location.protocol === "file:") { scanmsg.textContent = "starta med: inspirime open"; return; }
+  scanbtn.disabled = true;
+  scanmsg.textContent = "scannar …";
+  try {
+    const r = await fetch("/scan", { method: "POST" });
+    if (!r.ok) throw new Error(r.status);
+    for (;;) {
+      const s = await (await fetch("/scan/status")).json();
+      scanmsg.textContent = s.running ? "scannar … " + lastLine(s.log) : lastLine(s.log);
+      if (!s.running) { setTimeout(() => location.reload(), 800); return; }
+      await new Promise(res => setTimeout(res, 2000));
+    }
+  } catch (e) {
+    scanmsg.textContent = "ingen server - kör inspirime open";
+    scanbtn.disabled = false;
+  }
+};
 
 document.getElementById("q").oninput = e => { st.q = e.target.value; render(); };
 document.getElementById("sort").onchange = render;
 render();
 </script></body></html>
 """
+
+
+def prompt_for(r):
+    """The brief to hand a design agent, built from what we actually measured/described."""
+    parts = [f"Bygg en {r['type'] or 'sida'} i den här stilen.", ""]
+    if r["desc"]:
+        parts.append(f"Referens: {r['desc']}")
+    if r["style"]:
+        parts.append(f"Stil: {', '.join(r['style'])}")
+    if r["mood"]:
+        parts.append(f"Känsla: {r['mood']}")
+    if r["colors"]:
+        parts.append(f"Färgpalett (mätt från referensen): {', '.join(r['colors'])}")
+    parts.append(f"Format: {r['w']}×{r['h']} px")
+    parts.append(f"Referensbild: {ROOT / r['file']}")
+    parts += ["", "Behåll stämningen, färgerna och typografin — men gör eget innehåll, "
+                  "kopiera inte referensens text eller logotyp."]
+    return "\n".join(parts)
 
 
 def build():
@@ -344,8 +425,10 @@ def build():
         # the colour classifier may improve between scans: refresh it from the stored palette
         hue_color = accent(r["colors"])
         r["hue"], r["huefam"] = hue_of(hue_color), hue_family(hue_color)
+        r["prompt"] = prompt_for(r)
         con.execute("update shots set hue=?,huefam=? where key=?", (r["hue"], r["huefam"], r["key"]))
     con.commit()
+    con.close()
     OUT.write_text(TEMPLATE.replace("/*DATA*/[]", json.dumps(rows, ensure_ascii=False)))
     print(f"{len(rows)} shots -> {OUT}")
 
@@ -362,6 +445,11 @@ def selfcheck():
     meta = parse_meta('```json\n{"type":"Landing","style":["Minimal","editorial","minimal"],"mood":"calm","desc":"Ett lugnt gränssnitt."}\n```')
     assert meta["type"] == "landing" and meta["style"] == ["minimal", "editorial", "minimal"], meta
     assert parse_meta("no json here")["desc"] == "", parse_meta("nope")
+    brief = prompt_for({"type": "landing", "desc": "Ett lugnt gränssnitt.", "style": ["minimal"],
+                        "mood": "calm", "colors": ["#111111", "#eeeeee"], "w": 1440, "h": 900,
+                        "file": "library/x.png"})
+    assert "Bygg en landing" in brief and "#111111" in brief and "1440×900" in brief, brief
+    assert str(ROOT / "library/x.png") in brief, brief
     global DB
     DB, real = ROOT / "selfcheck.db", DB
     try:
@@ -380,6 +468,75 @@ def selfcheck():
     print("selfcheck ok")
 
 
+SCAN = {"running": False, "log": ""}
+
+
+def run_scan():
+    """Scan the inbox in the background so the button does not hang on a slow model."""
+    if SCAN["running"]:
+        return False
+    SCAN.update(running=True, log="startar")
+
+    def work():
+        try:
+            lines = scan([f for f in INBOX.rglob("*") if f.is_file()] if INBOX.exists() else [])
+            SCAN["log"] = "\n".join(lines)
+        except Exception as e:
+            SCAN["log"] = f"fel: {e}"
+        finally:
+            SCAN["running"] = False
+            build()
+    threading.Thread(target=work, daemon=True).start()
+    return True
+
+
+def serve(port=8789, open_browser=True):
+    # local-only (127.0.0.1): serves the gallery plus /scan so the page can index new drops
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(SimpleHTTPRequestHandler):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, directory=str(ROOT), **kw)
+
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            if self.path.split("?")[0] == "/scan/status":
+                return self._json(SCAN)
+            super().do_GET()
+
+        def do_POST(self):
+            if self.path.split("?")[0] == "/scan":
+                return self._json({"started": run_scan(), **SCAN})
+            self.send_error(404)
+
+        def _json(self, obj):
+            body = json.dumps(obj).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    build()
+    url = f"http://127.0.0.1:{port}/gallery.html"
+    try:
+        srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    except OSError:
+        print(f"servern kör redan: {url}")
+        if open_browser:
+            subprocess.run(["xdg-open", url], check=False)
+        return
+    print(f"Inspirime: {url}  (Ctrl+C stänger)")
+    if open_browser:
+        threading.Timer(0.4, lambda: subprocess.run(["xdg-open", url], check=False)).start()
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        print()
+
+
 def main():
     ap = argparse.ArgumentParser(prog="inspirime")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -387,7 +544,9 @@ def main():
     s.add_argument("paths", nargs="*", type=Path)
     s.add_argument("--source", help="source label (default: the inbox subfolder name)")
     sub.add_parser("build", help="write gallery.html")
-    sub.add_parser("open", help="build and open gallery.html")
+    o = sub.add_parser("open", help="serve the gallery and open it (scan button works here)")
+    o.add_argument("--port", type=int, default=8789)
+    o.add_argument("--no-browser", action="store_true")
     sub.add_parser("selfcheck", help="run the assert-based check")
     a = ap.parse_args()
 
@@ -401,12 +560,12 @@ def main():
                 files.append(p)
             else:
                 sys.exit(f"no such path: {p}")
-        scan(files, a.source)
+        for line in scan(files, a.source):
+            print(line)
     elif a.cmd == "build":
         build()
     elif a.cmd == "open":
-        build()
-        subprocess.run(["xdg-open", str(OUT)], check=False)
+        serve(a.port, not a.no_browser)
     else:
         selfcheck()
 
