@@ -1192,7 +1192,7 @@ def one_line(r):
 
 MCP_TOOLS = [
     {"name": "handoffs",
-     "description": "Inspiration references the user pressed 'Skicka' on in the Inspirime gallery, "
+     "description": "Inspiration references the user pressed Send on in the Inspirime gallery, "
                     "newest first. Call this first. Each entry has a key: call get(key) for the full "
                     "brief plus the reference image, then ack(key) when you have taken it.",
      "inputSchema": {"type": "object", "properties": {"limit": {"type": "integer"}}}},
