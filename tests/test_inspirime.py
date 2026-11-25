@@ -28,6 +28,15 @@ def test_home_is_redirected():
     assert str(I.ROOT) == str(Path(TMP).resolve())
 
 
+def test_db_creates_missing_home():
+    real_root, real_db = I.ROOT, I.DB
+    I.ROOT, I.DB = Path(TMP) / "nested" / "x", Path(TMP) / "nested" / "x" / "inspirime.db"
+    try:
+        assert I.db().execute("select count(*) from shots").fetchone()[0] == 0
+    finally:
+        I.ROOT, I.DB = real_root, real_db
+
+
 def test_palette_has_shares():
     pal = I.palette(Image.open(img("flat.png")))
     assert 1 <= len(pal) <= 12 and pal[0]["hex"].startswith("#"), pal

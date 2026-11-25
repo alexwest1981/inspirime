@@ -118,6 +118,7 @@ def env_key(*names, default=""):
 
 
 def db():
+    ROOT.mkdir(parents=True, exist_ok=True)      # INSPIRIME_HOME may point at a folder that does not exist yet
     con = sqlite3.connect(DB)
     con.execute(SCHEMA)
     con.execute(HANDOFFS)
