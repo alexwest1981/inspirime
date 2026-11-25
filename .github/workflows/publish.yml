@@ -1,0 +1,24 @@
+name: publish
+
+# Trusted publishing: no token in this repo. Add a "pending publisher" on pypi.org with
+# owner alexwest1981, repository inspirime, workflow publish.yml, environment pypi.
+# Then every v* tag publishes on its own.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  pypi:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write          # the OIDC token PyPI verifies
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install build && python -m build
+      - run: python tests/test_inspirime.py
+      - uses: pypa/gh-action-pypi-publish@release/v1
