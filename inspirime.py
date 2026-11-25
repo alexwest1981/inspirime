@@ -373,6 +373,7 @@ def scan(paths, source=None, describe_too=True):
             meta = describe(ROOT / file)
             if meta:
                 values = {k: json.dumps(v) if isinstance(v, list) else v for k, v in meta.items()}
+                # column names come from META_FIELDS, never from input; only the values are bound
                 con.execute(f"update shots set {','.join(k + '=?' for k in values)} where key=?",
                             (*values.values(), key))
                 con.commit()
