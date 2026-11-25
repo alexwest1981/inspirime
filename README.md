@@ -8,7 +8,12 @@ then serves it to Hermes, Claude Code, Cursor or any MCP client, with the image 
 
 ![Inspirime gallery](docs/demo.png)
 
-*That is `inspirime demo` — real measured palettes, no API key, no screenshots of someone else's work.*
+*That is `inspirime demo` — six drawn samples, no API key, no screenshots of anyone else's work.*
+
+![A real library](docs/library.png)
+
+*A real library, 40 saved Pinterest/Dribbble screenshots, same header and filters. The references
+stay the property of their creators; Inspirime only indexes and measures them.*
 
 ## Why
 
