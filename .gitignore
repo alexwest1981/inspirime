@@ -1,8 +1,9 @@
 inspirime.db
 gallery.html
 library/
-inbox/*
+inbox/**
 !inbox/.gitkeep
+!inbox/*/.gitkeep
 selfcheck.db
 __pycache__/
 *.egg-info/
