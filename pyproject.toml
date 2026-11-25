@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "inspirime"
+version = "0.2.0"                # keep in sync with inspirime.__version__
+description = "Inspiration library for design agents - measured palettes, dense briefs, MCP handoff"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = ["pillow>=9.0"]
+keywords = ["design", "inspiration", "mcp", "screenshots", "palette", "agent", "ui"]
+classifiers = [
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Designers",
+  "Programming Language :: Python :: 3",
+  "Topic :: Multimedia :: Graphics",
+  "Topic :: Software Development :: User Interfaces",
+]
+
+[project.scripts]
+inspirime = "inspirime:main"
+
+[tool.setuptools]
+py-modules = ["inspirime"]

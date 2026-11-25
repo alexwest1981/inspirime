@@ -1,117 +1,115 @@
 # Inspirime
 
-Bibliotek för skärmdumpar du sparat från Pinterest och Dribbble. Varje bild får
-en mätt färgpalett, en stilklassning och en beskrivning — sedan bläddrar du i ett
-galleri med filter.
+**Your saved design screenshots, turned into a library a design agent can actually read.**
 
-## Snabbstart
+Drop in a folder of Pinterest/Dribbble saves. Inspirime measures the colours from the pixels,
+has a vision model read the layout, and gives every reference a dense, unambiguous design brief —
+then serves it to Hermes, Claude Code, Cursor or any MCP client, with the image attached.
+
+![Inspirime gallery](docs/demo.png)
+
+*That is `inspirime demo` — real measured palettes, no API key, no screenshots of someone else's work.*
+
+## Why
+
+A screenshot folder is a graveyard: you remember "that dark dashboard with the lime accent" and then
+scroll for five minutes. And when you finally want to *build* something in that style, you hand an
+agent a picture and a vague sentence.
+
+Inspirime does two things about that:
+
+1. **Measures instead of guessing.** Palette (12 colours, each with the share of the image it
+   covers), background, accent, text colour behind a WCAG contrast gate — all read from the pixels.
+   The model only does what models are good at: layout, sections, typography, density.
+2. **Writes the brief, not just a tag.** One reference becomes a sectioned brief: goal, reference
+   facts, exact hex values, numbered requirements, prohibitions, delivery format, and a checklist
+   the agent verifies itself against. Swedish or English (`INSPIRIME_LANG`).
+
+## Install
 
 ```bash
-inspirime open        # startar galleriet på http://127.0.0.1:8789 och öppnar webbläsaren
+pipx install git+https://github.com/<you>/inspirime      # or: pip install --user .
+inspirime demo                                          # sample library, no key needed
+inspirime open                                          # gallery at http://127.0.0.1:8789
 ```
 
-Lägg nya dumpar i `inbox/pinterest/` eller `inbox/dribbble/` och tryck **Scanna nya**
-i sidan — den indexerar, beskriver och laddar om galleriet själv. Mappnamnet blir
-källan i filtret.
+Python 3.9+, one dependency (Pillow), no server to deploy, no database to install — SQLite, one file.
 
-Vill du indexera bilder som redan ligger någon annanstans (de kopieras, originalen
-rörs inte):
+## Use
 
 ```bash
-inspirime scan ~/Pictures/Inspo --source inspo
-inspirime build
+inspirime scan ~/Pictures/inspo            # index a folder (copies into library/, originals untouched)
+inspirime scan                             # or drop files in inbox/pinterest, inbox/dribbble
+inspirime open                             # browse, filter, click a card → brief → send
+inspirime brief <key>                      # the brief, in the terminal
+inspirime export --out library.json        # the whole index as JSON
+inspirime tag <key> +minimal -corporate    # correct the model by hand
+inspirime delete <key>                     # remove one reference
 ```
 
-## Knappar i galleriet
+The gallery has a **Scan new** button (needs `inspirime open`, not `file://`), filters for style,
+type, colour family and source, and sorting by colour or type.
 
-| Gör | Hur |
+## Give it to your agent
+
+`inspirime mcp` is a stdio MCP server — no port, no daemon, no dependencies:
+
+| tool | what it does |
 |---|---|
-| indexera nya bilder | **Scanna nya** (kräver att sidan körs via `inspirime open`, inte `file://`) |
-| filtrera | klicka på stil/typ/färg/källa, eller sök i fritextfältet |
-| sortera | välj Nyast / färg / typ |
-| få en promp till en designagent | klicka på en bild → panel med färdig brief → **Kopiera** |
+| `handoffs` | references you pressed **Send** on in the gallery, newest first |
+| `search` | free text + type/style/colour/source over the whole library |
+| `get` | the full record, the brief, **and the image as an attachment** |
+| `ack` | marks a handoff as taken |
 
-## Vad som händer med en bild
+```bash
+hermes mcp add inspirime --command python3 --args /path/to/inspirime.py mcp
+claude mcp add inspirime python3 /path/to/inspirime.py mcp
+codex  mcp add inspirime -- python3 /path/to/inspirime.py mcp
+```
 
-| Fält | Källa |
+**Send** in the gallery freezes the brief into a queue and copies it to the clipboard, so nothing is
+lost when no agent is running: the entry waits, and `get` works on any key later.
+
+## The model
+
+Any of these works. With none configured, Inspirime still indexes and measures — descriptions just
+stay empty until you add a key.
+
+| setup | how |
 |---|---|
-| 12-färgspalett med andel i procent, accentfärg, tema | mätt med Pillow på bildens pixlar — inte gissat |
-| typ (landing, dashboard, mobile, poster …) | bildmodell |
-| stil (minimal, brutalist, editorial …) | bildmodell, max 3 taggar |
-| uppbyggnad, sektioner i läsordning, typografi, täthet, hörnradie, bildspråk, detaljer | bildmodell |
-| mood + beskrivning på svenska | bildmodell |
+| Google Gemini | `GEMINI_API_KEY=...` in `./.env` (default) |
+| OpenAI | `OPENAI_API_KEY=...` |
+| Anything OpenAI-compatible (LM Studio, Ollama, vLLM, a router) | `INSPIRIME_VISION_URL=http://host:port/v1` + `INSPIRIME_VISION_MODEL` |
 
-Accentfärgen är den mest mättade tonen i paletten, inte den vanligaste — annars blir varje
-vit UI-skärm "neutral". Saknas en riktig accent (monokrom referens) säger prompten det
-uttryckligen i stället för att hitta på en.
+Gemini Flash costs a fraction of a cent per image. Undescribed rows are retried on the next `scan`,
+so a run is always safe to repeat. Images go only to the provider you configure.
 
-Bilden kopieras till `library/` och originalet rörs inte. Indexet ligger i
-`inspirime.db` (SQLite). En bild som sparats både som `.jpg` och `.webp` indexeras
-en gång — den största filen vinner.
+## Files
 
-## Modell
+```
+inspirime.py        the whole tool (one file)
+inbox/<source>/     where you drop screenshots; the folder name becomes the source filter
+library/            copies of indexed images
+inspirime.db        SQLite index + the handoff queue
+gallery.html        generated gallery
+```
 
-Beskrivningarna kommer från Gemini direkt — `GOOGLE_API_KEY` läses från
-`~/.hermes/.env`, modell `gemini-3.5-flash-lite`. Det kostar några öre för hela
-biblioteket och är stabilt. Saknas nyckeln (eller svarar Gemini inte) faller den
-tillbaka på den lokala gratiroutern `http://127.0.0.1:3001/v1` med `model=auto`,
-som är gratis men stryper ibland. Bilder som inte blev beskrivna hamnar som
-`pending` och försöks igen vid nästa `scan`.
+Set `INSPIRIME_HOME` to keep that data elsewhere (an installed copy defaults to
+`~/.local/share/inspirime`).
+
+## Tests
 
 ```bash
-INSPIRIME_GOOGLE_MODEL=gemini-3.8-flash inspirime scan      # annan modell
-INSPIRIME_GOOGLE_KEY=... inspirime scan                     # annan nyckel
-INSPIRIME_VISION_URL=http://127.0.0.1:11434/v1 \
-INSPIRIME_VISION_MODEL=qwen3-vl inspirime scan              # egen router
+python3 tests/test_inspirime.py     # 12 checks, no network, no API key
+inspirime selfcheck                 # the same logic, shipped with the tool
 ```
 
-## Skicka till en agent (MCP)
+## Notes and limits
 
-Klicka på en bild → **Skicka** → välj mottagare. Två saker händer:
+- Colour, size, ratio and contrast are **measured**; layout, sections and typography are a model's
+  reading of the picture — a good draft, correctable with `inspirime tag`.
+- No accent means no accent: on a monochrome reference the brief says so instead of inventing a hex.
+- The local server binds to `127.0.0.1` and serves only the library folder.
+- MIT licensed.
 
-1. briefen hamnar i urklipp (fungerar med vilken app som helst, även de utan MCP),
-2. en *handoff* köas i databasen med briefen fryst som den såg ut just då.
-
-Agenten hämtar den via MCP-servern `inspirime` (stdio, inga beroenden, ingen port):
-
-```bash
-python3 ~/Projects/inspirime/inspirime.py mcp
-```
-
-| Verktyg | Gör |
-|---|---|
-| `handoffs` | listar det du tryckt Skicka på, nyast först — agenten börjar här |
-| `search` | fritext + typ/stil/kulör/källa över hela biblioteket |
-| `get` | hela posten + färdig brief **och referensbilden som bilaga** (agenten ser den) |
-| `ack` | kvitterar så handoffen försvinner ur kön |
-
-Redan inkopplad i Hermes (verktygen heter `mcp__inspirime__*` och dyker upp i **nya** sessioner)
-och i Claude Code. Andra klienter:
-
-```bash
-codex mcp add inspirime -- /usr/bin/python3 /home/alex/Projects/inspirime/inspirime.py mcp
-opencode mcp add inspirime --command "/usr/bin/python3 /home/alex/Projects/inspirime/inspirime.py mcp"
-```
-
-Inget går förlorat om agenten inte är igång: kön ligger kvar, och `get` fungerar i efterhand på
-vilken nyckel som helst ur biblioteket.
-
-## Autopilot
-
-```bash
-# var 15:e minut: indexera nya dumpar, bygg om galleriet
-*/15 * * * * cd ~/Projects/inspirime && ./inspirime.py scan >/dev/null 2>&1 && ./inspirime.py build >/dev/null
-```
-
-## Filer
-
-```
-inspirime.py     hela verktyget (open / scan / build / selfcheck)
-inbox/<källa>/   hit sparar du dumparna; mappnamnet blir källan
-library/         kopior av indexerade bilder
-inspirime.db     index
-gallery.html     galleriet (genereras; öppnas via http://127.0.0.1:8789/gallery.html)
-```
-
-`./inspirime.py selfcheck` kör kontrollen av palett, JSON-tolkning och
-dubblettregeln utan nätverk.
+Svensk dokumentation: [docs/svenska.md](docs/svenska.md).

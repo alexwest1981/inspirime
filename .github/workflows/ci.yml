@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.9", "3.11", "3.13"]
+    runs-on: ${{ matrix.os }}
+    env:
+      INSPIRIME_HOME: ${{ github.workspace }}/.testlib
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install .
+      - run: inspirime --version
+      - run: python tests/test_inspirime.py
+      - run: inspirime selfcheck
+      - name: demo library works with no API key
+        run: |
+          inspirime demo
+          inspirime export --out "$INSPIRIME_HOME/library.json"
+          test -s "$INSPIRIME_HOME/library.json"
+      - name: brief renders from the index
+        run: |
+          KEY=$(python -c "import os,sqlite3;print(sqlite3.connect(os.environ['INSPIRIME_HOME']+'/inspirime.db').execute('select key from shots limit 1').fetchone()[0])")
+          inspirime brief "$KEY" | head -5
+      - name: index one new image with no model configured
+        run: |
+          mkdir -p "$INSPIRIME_HOME/inbox/dribbble"
+          python -c "from PIL import Image; Image.new('RGB', (640, 480), (30, 90, 200)).save('$INSPIRIME_HOME/inbox/dribbble/shot.png')"
+          inspirime scan --no-describe
+      - name: mcp handshake
+        run: |
+          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | inspirime mcp | grep -q '"inspirime"'

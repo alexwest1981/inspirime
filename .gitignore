@@ -1,5 +1,13 @@
 inspirime.db
 gallery.html
 library/
+inbox/*
+!inbox/.gitkeep
 selfcheck.db
 __pycache__/
+*.egg-info/
+build/
+dist/
+.venv/
+.testlib/
+*.json
