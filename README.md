@@ -33,7 +33,7 @@ Inspirime does two things about that:
 ## Install
 
 ```bash
-pipx install git+https://github.com/<you>/inspirime      # or: pip install --user .
+pipx install git+https://github.com/alexwest1981/inspirime      # or: pip install --user .
 inspirime demo                                          # sample library, no key needed
 inspirime open                                          # gallery at http://127.0.0.1:8789
 ```
@@ -67,7 +67,7 @@ type, colour family and source, and sorting by colour or type.
 | `ack` | marks a handoff as taken |
 
 ```bash
-hermes mcp add inspirime --command python3 --args /path/to/inspirime.py mcp
+hermes mcp add inspirime --command python3 --args /path/to/inspirime.py mcp   # or the pipx path
 claude mcp add inspirime python3 /path/to/inspirime.py mcp
 codex  mcp add inspirime -- python3 /path/to/inspirime.py mcp
 ```
