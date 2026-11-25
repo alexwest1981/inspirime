@@ -20,5 +20,5 @@ jobs:
         with:
           python-version: "3.13"
       - run: pip install build && python -m build
-      - run: python tests/test_inspirime.py
+      - run: pip install . && python tests/test_inspirime.py
       - uses: pypa/gh-action-pypi-publish@release/v1
