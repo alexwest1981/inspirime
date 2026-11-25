@@ -35,10 +35,15 @@ inspirime build
 
 | Fält | Källa |
 |---|---|
-| färger, kulörfamilj (varm/kall/grön/neutral) | mätt med Pillow på bildens pixlar — inte gissat |
+| 12-färgspalett med andel i procent, accentfärg, tema | mätt med Pillow på bildens pixlar — inte gissat |
 | typ (landing, dashboard, mobile, poster …) | bildmodell |
 | stil (minimal, brutalist, editorial …) | bildmodell, max 3 taggar |
+| uppbyggnad, sektioner i läsordning, typografi, täthet, hörnradie, bildspråk, detaljer | bildmodell |
 | mood + beskrivning på svenska | bildmodell |
+
+Accentfärgen är den mest mättade tonen i paletten, inte den vanligaste — annars blir varje
+vit UI-skärm "neutral". Saknas en riktig accent (monokrom referens) säger prompten det
+uttryckligen i stället för att hitta på en.
 
 Bilden kopieras till `library/` och originalet rörs inte. Indexet ligger i
 `inspirime.db` (SQLite). En bild som sparats både som `.jpg` och `.webp` indexeras

@@ -40,12 +40,22 @@ PROMPT = (
     '{"type": exactly one of "landing|dashboard|mobile|poster|article|other", '
     '"style": up to 3 tags from [minimal, brutalist, editorial, swiss, retro, playful, glassmorphism, '
     'gradient, typographic, three-d, illustration, dark-mode, corporate, luxury], '
-    '"mood": one word, "desc": one sentence in Swedish describing the visual idea}'
+    '"mood": one word, "desc": one sentence in Swedish about what the screen is and does, '
+    '"layout": one dense line in Swedish on how the page is built (columns, sidebar widths, grid), '
+    '"sections": every visible block in reading order, max 8, each 2-5 words in Swedish, '
+    '"typography": one line in Swedish: serif/sans/mono, how many weights, label treatment, size feel, '
+    '"density": "luftig"|"medel"|"tat", "radius": "0"|"4"|"8"|"12"|"16"|"pill", '
+    '"imagery": one line in Swedish: none/photos/3d/illustration/icons only, '
+    '"notes": one line in Swedish on shadows, borders, texture, motion hints - or empty string}'
 )
+META_FIELDS = ("type", "style", "mood", "desc", "layout", "sections", "typography",
+               "density", "radius", "imagery", "notes")
 SCHEMA = """create table if not exists shots(
   key text primary key, file text not null, w int, h int,
   colors text, hue int, huefam text, source text,
-  type text, style text, mood text, desc text, added text)"""
+  type text, style text, mood text, desc text, added text,
+  layout text, sections text, typography text, density text, radius text,
+  imagery text, notes text)"""
 
 
 def env_key(*names, default=""):
@@ -65,13 +75,29 @@ def env_key(*names, default=""):
 def db():
     con = sqlite3.connect(DB)
     con.execute(SCHEMA)
+    # older indexes predate the structured fields: add what is missing instead of rebuilding
+    for col in META_FIELDS[4:] + ("w", "h", "colors", "hue", "huefam", "source"):
+        try:
+            con.execute(f"alter table shots add column {col} text")
+        except sqlite3.OperationalError:
+            pass
     return con
 
 
-def palette(im, n=5):
+def palette(im, n=12):
+    """Measured palette: hex plus how much of the picture it covers, largest first.
+    n=12 rather than 5: an accent used on 2 % of a white screen vanishes at 5 colours."""
     q = im.convert("RGB").resize((100, 100)).quantize(n)
     pal = q.getpalette()
-    return ["#%02x%02x%02x" % tuple(pal[i * 3:i * 3 + 3]) for _, i in sorted(q.getcolors(), reverse=True)]
+    counted = sorted(q.getcolors(), reverse=True)
+    total = sum(c for c, _ in counted) or 1
+    return [{"hex": "#%02x%02x%02x" % tuple(pal[i * 3:i * 3 + 3]), "pct": round(100 * c / total)}
+            for c, i in counted]
+
+
+def hexes(colors):
+    """Palette entries are dicts now; older rows stored plain hex strings."""
+    return [c["hex"] if isinstance(c, dict) else c for c in colors or []]
 
 
 def hue_of(hexcolor):
@@ -88,6 +114,39 @@ def accent(colors):
         _, l, s = colorsys.rgb_to_hls(r, g, b)
         return s if 0.12 < l < 0.92 else 0
     return max(colors, key=score) if colors else "#000000"
+
+
+def contrast(a, b):
+    """WCAG contrast ratio between two hex colours."""
+    def rel(h):
+        def lin(v):
+            v /= 255
+            return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+        r, g, bl = (int(h[i:i + 2], 16) for i in (1, 3, 5))
+        return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(bl)
+    lo, hi = sorted((rel(a), rel(b)))
+    return round((hi + 0.05) / (lo + 0.05), 2)
+
+
+def analyse(colors):
+    """Background, real accent and real text colour from the measured palette.
+    accent/text are None when the picture genuinely does not contain them - better than inventing one."""
+    hx = hexes(colors)
+    if not hx:
+        return {"bg": "#ffffff", "accent": None, "text": None, "dark": False}
+    bg = hx[0]
+    dark = luma(bg) < 0.4
+
+    def chroma(c):
+        r, g, b = (int(c[i:i + 2], 16) / 255 for i in (1, 3, 5))
+        _, l, s = colorsys.rgb_to_hls(r, g, b)
+        return s if 0.12 < l < 0.92 else 0
+
+    acc = max(hx, key=chroma)
+    acc = acc if chroma(acc) >= 0.25 else None
+    txt = max(hx, key=luma) if dark else min(hx, key=luma)
+    txt = txt if contrast(txt, bg) >= 4.5 else None
+    return {"bg": bg, "accent": acc, "text": txt, "dark": dark}
 
 
 def hue_family(hexcolor):
@@ -107,12 +166,27 @@ def parse_meta(text):
         d = json.loads(m.group(0)) if m else {}
     except json.JSONDecodeError:
         d = {}
-    tags = [str(t).strip().lower() for t in (d.get("style") or []) if str(t).strip()][:3]
+
+    def tags(v, limit):
+        if isinstance(v, str):
+            v = [t for t in re.split(r"[,;]", v)]
+        return [str(t).strip().lower() for t in (v or []) if str(t).strip()][:limit]
+
+    def line(v, limit):
+        return " ".join(str(v or "").split())[:limit]
+
     return {
-        "type": (str(d.get("type") or "other").strip().lower() or "other")[:20],
-        "style": tags,
-        "mood": str(d.get("mood") or "")[:40],
-        "desc": str(d.get("desc") or "")[:400],
+        "type": (line(d.get("type"), 20).lower() or "other"),
+        "style": tags(d.get("style"), 3),
+        "mood": line(d.get("mood"), 40),
+        "desc": line(d.get("desc"), 400),
+        "layout": line(d.get("layout"), 300),
+        "sections": tags(d.get("sections"), 8),
+        "typography": line(d.get("typography"), 240),
+        "density": line(d.get("density"), 20).lower(),
+        "radius": line(d.get("radius"), 20).lower(),
+        "imagery": line(d.get("imagery"), 200),
+        "notes": line(d.get("notes"), 240),
     }
 
 
@@ -203,21 +277,24 @@ def scan(paths, source=None):
         if not dest.exists():
             shutil.copy2(p, dest)
         meta = describe(dest) or {}
-        hue_color = accent(colors)
-        con.execute("insert or replace into shots(key,file,w,h,colors,hue,huefam,source,type,style,mood,desc,added)"
-                    " values(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (key, f"library/{dest.name}", w, h, json.dumps(colors), hue_of(hue_color),
-                     hue_family(hue_color), source_of(p, source), meta.get("type"),
-                     json.dumps(meta.get("style") or []), meta.get("mood"), meta.get("desc"),
-                     datetime.now(timezone.utc).isoformat(timespec="seconds")))
+        a = analyse(colors)
+        hue_color = a["accent"] or a["bg"]
+        row = {"key": key, "file": f"library/{dest.name}", "w": w, "h": h,
+               "colors": json.dumps(colors), "hue": hue_of(hue_color), "huefam": hue_family(hue_color),
+               "source": source_of(p, source),
+               "added": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+               **{k: json.dumps(v) if isinstance(v, list) else v for k, v in meta.items()}}
+        con.execute(f"insert or replace into shots({','.join(row)})"
+                    f" values({','.join('?' * len(row))})", tuple(row.values()))
         con.commit()
         new += 1
         out.append(f"+ {dest.name}  [{meta.get('type', 'pending')}] {meta.get('desc', '')}")
     for key, file in con.execute("select key,file from shots where desc is null or desc=''").fetchall():
         meta = describe(ROOT / file)
         if meta:
-            con.execute("update shots set type=?,style=?,mood=?,desc=? where key=?",
-                        (meta["type"], json.dumps(meta["style"]), meta["mood"], meta["desc"], key))
+            values = {k: json.dumps(v) if isinstance(v, list) else v for k, v in meta.items()}
+            con.execute(f"update shots set {','.join(k + '=?' for k in values)} where key=?",
+                        (*values.values(), key))
             con.commit()
             out.append(f"~ described {file}")
     total = con.execute("select count(*) from shots").fetchone()[0]
@@ -264,10 +341,10 @@ code{background:var(--card);border:1px solid var(--line);padding:2px 6px;border-
 #scanbtn{border-color:#3d434c;color:var(--fg);white-space:nowrap}
 #scanbtn:disabled{opacity:.55;cursor:progress}
 #scanmsg{font-size:12px;color:var(--dim)}
-dialog{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:14px;padding:20px 22px;width:min(760px,92vw)}
+dialog{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:14px;padding:20px 22px;width:min(920px,94vw)}
 dialog::backdrop{background:rgba(5,6,8,.72)}
 dialog h2{margin:0 0 12px;font-size:13px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
-#ptext{width:100%;background:#0f1114;border:1px solid var(--line);border-radius:9px;color:var(--fg);font:12.5px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;padding:12px;resize:vertical}
+#ptext{width:100%;background:#0f1114;border:1px solid var(--line);border-radius:9px;color:var(--fg);font:12.5px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;padding:12px;resize:vertical}
 .dlgbar{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}
 </style></head><body>
 <header>
@@ -290,7 +367,7 @@ dialog h2{margin:0 0 12px;font-size:13px;font-weight:600;letter-spacing:.1em;tex
 <main id=grid></main>
 <dialog id=promptdlg>
   <h2 id=pdlgtitle>Promp</h2>
-  <textarea id=ptext rows=13 spellcheck=false></textarea>
+  <textarea id=ptext rows=24 spellcheck=false></textarea>
   <div class=dlgbar>
     <button id=pclose class=chip>Stäng</button>
     <button id=pcopy class=chip>Kopiera</button>
@@ -342,7 +419,7 @@ function render() {
   <figcaption>
     <b>${esc(d.desc || "(väntar på beskrivning - kör scan igen)")}</b>
     ${esc(d.type || "")}${d.mood ? " · " + esc(d.mood) : ""}${d.w ? " · " + d.w + "×" + d.h : ""}
-    <div class=tags>${d.colors.map(c => `<span class=dot style="background:${esc(c)}" title="${esc(c)}"></span>`).join("")}
+    <div class=tags>${d.colors.map(c => `<span class=dot style="background:${esc(c.hex)}" title="${esc(c.hex)} ${esc(c.pct)} %"></span>`).join("")}
       ${(d.style || []).map(t => `<span class=tag>${esc(t)}</span>`).join("")}</div>
   </figcaption>
 </figure>`).join("") : `<div class=empty>Inga träffar.<br>Lägg skärmdumpar i <code>inbox/pinterest</code> eller <code>inbox/dribbble</code> och tryck <b>Scanna nya</b>.</div>`;
@@ -356,6 +433,7 @@ document.getElementById("grid").onclick = e => {
   document.getElementById("pdlgtitle").textContent =
     "prompt · " + (d.type || "inspiration") + ((d.style || []).length ? " · " + d.style.join(", ") : "");
   document.getElementById("ptext").value = d.prompt;
+  document.getElementById("ptext").scrollTop = 0;
   dlg.showModal();
 };
 document.getElementById("pclose").onclick = () => dlg.close();
@@ -395,35 +473,137 @@ render();
 """
 
 
+def luma(hexcolor):
+    r, g, b = (int(hexcolor[i:i + 2], 16) / 255 for i in (1, 3, 5))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def hsl(hexcolor):
+    r, g, b = (int(hexcolor[i:i + 2], 16) / 255 for i in (1, 3, 5))
+    h, l, s = colorsys.rgb_to_hls(r, g, b)
+    return int(h * 360), round(s * 100), round(l * 100)
+
+
+def ratio(w, h):
+    from math import gcd
+    g = gcd(w, h) or 1
+    a, b = w // g, h // g
+    return f"{a}:{b}" if a <= 32 and b <= 32 else f"{w / h:.2f}:1"
+
+
+DENSITY_HINT = {
+    "luftig": "luftig = 28-36 px mellan sektioner, 18-24 px inne i kort, gott om luft runt text",
+    "medel": "medel = 18-26 px mellan sektioner, 12-18 px inne i kort",
+    "tat": "tät = 10-16 px mellan sektioner, 8-12 px inne i kort, små radavstånd",
+}
+
+
 def prompt_for(r):
-    """The brief to hand a design agent, built from what we actually measured/described."""
-    parts = [f"Bygg en {r['type'] or 'sida'} i den här stilen.", ""]
-    if r["desc"]:
-        parts.append(f"Referens: {r['desc']}")
-    if r["style"]:
-        parts.append(f"Stil: {', '.join(r['style'])}")
-    if r["mood"]:
-        parts.append(f"Känsla: {r['mood']}")
-    if r["colors"]:
-        parts.append(f"Färgpalett (mätt från referensen): {', '.join(r['colors'])}")
-    parts.append(f"Format: {r['w']}×{r['h']} px")
-    parts.append(f"Referensbild: {ROOT / r['file']}")
-    parts += ["", "Behåll stämningen, färgerna och typografin — men gör eget innehåll, "
-                  "kopiera inte referensens text eller logotyp."]
-    return "\n".join(parts)
+    """A brief dense enough that a design agent has no room to interpret it wrong."""
+    colors = r["colors"] or []
+    a = analyse(colors)
+    bg, acc, text, dark = a["bg"], a["accent"], a["text"], a["dark"]
+    radius = r.get("radius") or ""
+    rad = "999px (pill)" if radius == "pill" else (f"{radius} px" if radius.isdigit() else "oklart")
+    orient = "liggande" if r["w"] > r["h"] else "stående" if r["h"] > r["w"] else "kvadrat"
+    sections = r["sections"] or []
+    style = r["style"] or []
+
+    p = ["# MÅL",
+         f"Bygg en {r['type'] or 'sida'} som ser ut att höra till samma produkt som referensen: "
+         "samma uppbyggnad, samma färgvärden, samma typografiska hierarki, samma täthet. "
+         "Eget innehåll och eget namn — formen ska vara omöjlig att ta miste på.",
+         "",
+         "# REFERENS"]
+    if r.get("desc"):
+        p.append(f"- Föreställer: {r['desc']}")
+    p.append(f"- Fil: {ROOT / r['file']}")
+    p.append(f"- Storlek: {r['w']}×{r['h']} px, {orient}, {ratio(r['w'], r['h'])}, källa: {r.get('source') or 'okänd'}")
+    if r.get("layout"):
+        p.append(f"- Uppbyggnad: {r['layout']}")
+    if sections:
+        p.append(f"- Sektioner i läsordning: {' → '.join(sections)}")
+    if r.get("typography"):
+        p.append(f"- Typografi: {r['typography']}")
+    p.append(f"- Täthet: {r.get('density') or 'oklart'} · Hörnradie: {rad} · Bildspråk: {r.get('imagery') or 'oklart'}")
+    if r.get("notes"):
+        p.append(f"- Detaljer: {r['notes']}")
+
+    p += ["", "# FÄRG — mätta på referensens pixlar, använd exakt dessa värden"]
+    for i, c in enumerate(colors):
+        share = f"{c['pct']} %" if isinstance(c, dict) and c.get("pct") else "andel okänd"
+        note = "  ← största ytan (bakgrund)" if i == 0 else ""
+        p.append(f"- {share} {hexes([c])[0]}{note}")
+    if acc:
+        ah, asat, al = hsl(acc)
+        p.append(f"- Accent: {acc} (hue {ah}°, mättnad {asat} %, ljushet {al} %) — den enda accentfärgen")
+    else:
+        p.append("- Accent: ingen. Referensen är i praktiken monokrom — hitta INTE på en accentfärg, "
+                 "använd bara ytorna ovan plus svart/vitt för text.")
+    if text:
+        p.append(f"- Textfärg: {text} mot bakgrunden {bg} (kontrast minst 4.5:1)")
+    else:
+        p.append(f"- Textfärg: inte mätbar i referensen. Använd en neutral mot {bg} och räkna på 4.5:1.")
+    p.append(f"- Tema: {'mörkt' if dark else 'ljust'} (bakgrundens ljushet {round(luma(bg), 2)})")
+    p.append(f"- Kulörfamilj: {r.get('huefam') or hue_family(acc or bg)}")
+
+    p += ["", "# KRAV"]
+    p.append("1. Använd hex-värdena ovan exakt. Inga egna nyanser, inga fler accenter, "
+             "inga gradienter om inte 'gradient' står bland stilorden.")
+    if r.get("layout"):
+        p.append(f"2. Samma uppbyggnad: {r['layout']}")
+    if sections:
+        p.append(f"3. Samma block i samma ordning: {', '.join(sections)} — inga block tillkommer eller tas bort.")
+    p.append(f"4. Hörnradie {rad} på varje kort, knapp och inmatningsfält. Samma överallt, inga undantag.")
+    p.append(f"5. Täthet: {DENSITY_HINT.get((r.get('density') or '').lower(), 'håll samma luft som referensen')}.")
+    if r.get("typography"):
+        p.append(f"6. Typografi: {r['typography']} — max två teckensnitt, högst tre vikter, "
+                 "radhöjd 1.4-1.6 för brödtext.")
+    p.append(f"7. Huvudvyn i {r['w']}×{r['h']} px ({ratio(r['w'], r['h'])}); responsiv ner till 390 px "
+             "utan att hierarkin eller sektionsordningen ändras.")
+    if style:
+        p.append(f"8. Stilorden som ska kännas igen: {', '.join(style)}.")
+    p.append("9. All text på svenska, eget påhittat innehåll med rimliga siffror. Inga platshållare som "
+             "'Lorem ipsum' eller 'Text här'.")
+
+    p += ["", "# FÖRBJUDET",
+          "- Kopiera inte text, logotyper, produktnamn eller bilder från referensen.",
+          "- Inga externa resurser: inga webbfonter, inga stockbilder, inga ikonbibliotek från nätet.",
+          "- Inga extra färger, skuggor eller animationer som inte syns i referensen."]
+
+    p += ["", "# LEVERANS",
+          "- En enda HTML-fil med CSS i <style> — inga byggsteg, inga dependencies.",
+          "- Alla färger som CSS-variabler i :root med namnen --bg, --surface, --accent, --text.",
+          "- Kommentera inget i koden; strukturen ska gå att läsa direkt."]
+
+    p += ["", "# KONTROLL INNAN DU ÄR KLAR",
+          f"- [ ] Bakgrund {bg}{', accent ' + acc if acc else ''}{' och text ' + text if text else ''} används exakt.",
+          f"- [ ] Radie {rad} på alla ytor.",
+          f"- [ ] Alla {len(sections) or 'nämnda'} sektioner finns i rätt ordning.",
+          "- [ ] Ingen text eller bild hämtad från referensen.",
+          "- [ ] Sidan fungerar i 390 px bredd utan horisontell scroll."]
+    return "\n".join(p)
 
 
 def build():
     con = db()
-    rows = [dict(zip(("key", "file", "w", "h", "colors", "hue", "huefam", "source",
-                      "type", "style", "mood", "desc", "added"), r))
-            for r in con.execute("select key,file,w,h,colors,hue,huefam,source,type,style,mood,desc,added"
-                                 " from shots order by added desc")]
+    cur = con.execute("select * from shots order by added desc")
+    cols = [d[0] for d in cur.description]
+    rows = [dict(zip(cols, r)) for r in cur]
     for r in rows:
         r["colors"] = json.loads(r["colors"] or "[]")
+        # re-measure when the palette predates percentages or the wider 12-colour sample
+        if not r["colors"] or isinstance(r["colors"][0], str) or len(r["colors"]) < 12:
+            try:
+                r["colors"] = palette(Image.open(ROOT / r["file"]))
+                con.execute("update shots set colors=? where key=?", (json.dumps(r["colors"]), r["key"]))
+            except Exception:
+                r["colors"] = [{"hex": c, "pct": 0} if isinstance(c, str) else c for c in r["colors"]]
         r["style"] = json.loads(r["style"] or "[]")
+        r["sections"] = json.loads(r["sections"] or "[]")
         # the colour classifier may improve between scans: refresh it from the stored palette
-        hue_color = accent(r["colors"])
+        a = analyse(r["colors"])
+        hue_color = a["accent"] or a["bg"]
         r["hue"], r["huefam"] = hue_of(hue_color), hue_family(hue_color)
         r["prompt"] = prompt_for(r)
         con.execute("update shots set hue=?,huefam=? where key=?", (r["hue"], r["huefam"], r["key"]))
@@ -437,19 +617,37 @@ def selfcheck():
     tmp = Path(os.environ.get("TMPDIR", "/tmp")) / "inspirime-selfcheck.png"
     Image.new("RGB", (400, 300), (198, 26, 40)).save(tmp)
     pal = palette(Image.open(tmp))
-    assert 1 <= len(pal) <= 5 and pal[0].startswith("#"), pal
-    assert hue_family(pal[0]) == "warm", (pal[0], hue_family(pal[0]))
-    assert 350 <= hue_of(pal[0]) or hue_of(pal[0]) <= 5, hue_of(pal[0])
+    assert 1 <= len(pal) <= 12 and pal[0]["hex"].startswith("#"), pal
+    assert abs(sum(c["pct"] for c in pal) - 100) <= 2, pal
+    assert hue_family(hexes(pal)[0]) == "warm", (pal, hue_family(hexes(pal)[0]))
+    assert 350 <= hue_of(hexes(pal)[0]) or hue_of(hexes(pal)[0]) <= 5, hue_of(hexes(pal)[0])
+    # a real accent on 2 % of a light screen must survive the palette measurement
+    light = [{"hex": h, "pct": 10} for h in ("#fbfbfb", "#f3f3f4", "#a8adb6", "#89b2e4", "#e7e2ce")]
+    assert analyse(light)["accent"] == "#89b2e4", analyse(light)
+    mono = [{"hex": h, "pct": 20} for h in ("#111111", "#1a1a1a", "#333333", "#545455")]
+    assert analyse(mono)["accent"] is None, analyse(mono)
+    assert analyse(light)["text"] is None, analyse(light)
+    assert analyse([{"hex": "#111111", "pct": 60}, {"hex": "#f0f1f2", "pct": 20}])["text"] == "#f0f1f2"
+    assert contrast("#111111", "#fbfbfb") > 18 and contrast("#fbfbfb", "#fbfbfb") == 1.0
     assert hue_family("#1b1c20") == "neutral"
     assert accent(["#f0f1f2", "#fbfbfb", "#1d545a"]) == "#1d545a", "accent must skip near-white"
-    meta = parse_meta('```json\n{"type":"Landing","style":["Minimal","editorial","minimal"],"mood":"calm","desc":"Ett lugnt gränssnitt."}\n```')
+    meta = parse_meta('```json\n{"type":"Landing","style":["Minimal","editorial","minimal"],"mood":"calm",'
+                      '"desc":"Ett lugnt gränssnitt.","layout":"vänsterspalt 240 px + 3 kolumner",'
+                      '"sections":["topprad","KPI-kort","tabell"],"typography":"sans, två vikter",'
+                      '"density":"tat","radius":"12","imagery":"ikoner","notes":"mjuka skuggor"}\n```')
     assert meta["type"] == "landing" and meta["style"] == ["minimal", "editorial", "minimal"], meta
+    assert meta["sections"] == ["topprad", "kpi-kort", "tabell"] and meta["radius"] == "12", meta
     assert parse_meta("no json here")["desc"] == "", parse_meta("nope")
     brief = prompt_for({"type": "landing", "desc": "Ett lugnt gränssnitt.", "style": ["minimal"],
-                        "mood": "calm", "colors": ["#111111", "#eeeeee"], "w": 1440, "h": 900,
-                        "file": "library/x.png"})
-    assert "Bygg en landing" in brief and "#111111" in brief and "1440×900" in brief, brief
-    assert str(ROOT / "library/x.png") in brief, brief
+                        "mood": "calm", "colors": [{"hex": "#111111", "pct": 40}, {"hex": "#eeeeee", "pct": 30},
+                                                   {"hex": "#2e8081", "pct": 10}],
+                        "w": 1440, "h": 900, "file": "library/x.png", "source": "pinterest",
+                        "layout": "vänsterspalt 240 px + kortgrid", "sections": ["topprad", "KPI-kort"],
+                        "typography": "sans, två vikter", "density": "medel", "radius": "12",
+                        "imagery": "ikoner", "notes": "mjuka skuggor", "huefam": "cool"})
+    for needle in ("# MÅL", "# FÄRG", "# KRAV", "# FÖRBJUDET", "# LEVERANS", "40 %", "#2e8081",
+                   "1440×900", "8:5", "topprad → KPI-kort", "12 px", "18-26 px", str(ROOT / "library/x.png")):
+        assert needle in brief, (needle, brief)
     global DB
     DB, real = ROOT / "selfcheck.db", DB
     try:
